@@ -10,10 +10,13 @@ from bokeh.models import (FuncTickFormatter,
                       Range1d,
                       HoverTool, 
                       ColumnDataSource)
-from bokeh.models import DatePicker, TextInput, Button
+from bokeh.models import (DatePicker, 
+                          TextInput, 
+                          Button,
+                          Select)
 import datashader as ds
 from obspy.clients.fdsn import Client
-from obspy.clients.fdsn.header import FDSNException
+from obspy.clients.fdsn.header import FDSNException, FDSNNoDataException
 from obspy import UTCDateTime, Stream
 from pyproj import Geod
 import numpy as np
@@ -23,8 +26,7 @@ import pickle
 
 
 warnings.filterwarnings('ignore')
-client = Client(base_url='http://service.geonet.org.nz')
-hv.extension('bokeh')
+
 
 seismic = [('KRVZ', '10', 'EHZ'), ('OTVZ', '10', 'HHZ'),
            ('WTVZ', '10', 'EHZ'), ('NGZ', '10', 'EHZ'),
@@ -41,6 +43,31 @@ acoustic = [('COVZ', '30', 'HDF'), ('IVVZ', '30', 'HDF'),
             ('KRVZ', '30', 'HDF'), ('OTVZ', '30', 'HDF'),
             ('WTVZ', '30', 'HDF')]
 
+
+#GeoNet's FDSN web servers
+arc_client = Client('http://service.geonet.org.nz')
+nrt_client = Client('http://beta-service-nrt.geonet.org.nz')
+
+
+def GeoNetFDSNrequest(date1, date2, net, sta, loc, cmp):
+    """
+    Request waveform data from GeoNet's FDSN webservices.
+    """
+    time1 = UTCDateTime(date1)
+    time2 = UTCDateTime(date2)
+    try:
+        st = nrt_client.get_waveforms(net, sta, loc, cmp, time1, time2,
+                                      attach_response=True)
+        inv = nrt_client.get_stations(network=net, station=sta, 
+                                     starttime=time1, endtime=time2)
+    except FDSNNoDataException:
+        st = arc_client.get_waveforms(net, sta, loc, cmp, time1, time2,
+                                      attach_response=True)
+        inv = arc_client.get_stations(network=net, station=sta, 
+                                      starttime=time1, endtime=time2)
+    return (st, inv)
+
+
 def get_data(stations, target, tstart, tend, prefix, new=False):
     fout = os.path.join('/tmp','_'.join((prefix,str(target[0]),str(target[1]),str(tstart),str(tend))))
     g = Geod(ellps='WGS84')
@@ -53,9 +80,7 @@ def get_data(stations, target, tstart, tend, prefix, new=False):
         for s, loc, cmp in stations:
             try:
                 print(s, str(loc), cmp, tstart, tend)
-                st_tmp = client.get_waveforms('NZ', s, str(loc), cmp, 
-                                              tstart, tend, 
-                                              attach_response=True)
+                st_tmp, inv = GeoNetFDSNrequest(tstart, tend, 'NZ', s, str(loc), cmp)
             except FDSNException:
                 print('No data for {}.{}'.format(s,cmp))
                 continue
@@ -69,8 +94,6 @@ def get_data(stations, target, tstart, tend, prefix, new=False):
                     tr.taper(0.05)
                     tr.decimate(10)
                     tr.decimate(10)
-            inv = client.get_stations(network='NZ', station=s, 
-                                      starttime=tstart, endtime=tend)
             _s = inv[0][0]
             _,_,d = g.inv(target[0], target[1], _s.longitude, _s.latitude)
             tr.stats.distance = d
@@ -81,7 +104,7 @@ def get_data(stations, target, tstart, tend, prefix, new=False):
     return st
 
 
-def record_section_hv(start, end, target='tongariro', red_vel=0., new=False):
+def record_section_hv(start, end, target, red_vel=0., new=False):
     targets = {'tongariro': (175.671854359, -39.107850505),
                'ruapehu': (175.564490, -39.281149)}
     st_seismic = get_data(seismic, targets[target], start, end, 'seismic', new=new)
@@ -118,6 +141,7 @@ def record_section_hv(start, end, target='tongariro', red_vel=0., new=False):
     return hv.NdOverlay(curves, kdims=['name', 'type']) 
 
 
+hv.extension('bokeh')
 hv.output(size=30)
 
 
@@ -132,18 +156,41 @@ def apply_axis_formatter(plot, element):
    
 renderer = hv.renderer('bokeh').instance(mode='server')
 
+end = UTCDateTime(2018,2,11,1,15,00)
+start = end - 10*60.
+target = 'tongariro'
+
+glob_var = {'syear': start.year,
+            'smonth': start.month,
+            'sday': start.day,
+            'shour': start.hour,
+            'sminute': start.minute,
+            'ssecond': start.second,
+            'eyear': end.year,
+            'emonth': end.month,
+            'eday': end.day,
+            'ehour': end.hour,
+            'eminute': end.minute,
+            'esecond': end.second,
+            'target': target}
+
+
 def modify_doc(doc):
-    
+
+    #end = UTCDateTime(2018,2,11,1,15,00)
     #end = UTCDateTime.utcnow()
-    #start = end - 10*60.
-    start = UTCDateTime(2012,8,6,11,40)
-    end = start + 20*60.
+    # 1st Te Maari eruption
+    #start = UTCDateTime(2012,8,6,11,40)
+    #end = start + 20*60.
+    # 2nd Te Maari eruption
     #start = UTCDateTime(2012,11,21,0,20)
     #end = tstart + 20*60.
-    #tstart = UTCDateTime(2018,1,23,6,20)
-    volcano = 'tongariro'
-    update_date = HVStream.define('update_date', start=start, end=end)
-    dm = hv.DynamicMap(record_section_hv, streams=[update_date()])
+    # 2007 Ruapehu eruption
+    #tstart = UTCDateTime(2007,9,25,8,26)
+    #tend = tstart + 10*60.
+     
+    update_data = HVStream.define('update_date', target=target, start=start, end=end)
+    dm = hv.DynamicMap(record_section_hv, streams=[update_data()])
     
     color_key = {'seismic': 'blue', 'acoustic': 'red'}    
     lyt = datashade(dm, aggregator=ds.count_cat('type'),
@@ -151,35 +198,68 @@ def modify_doc(doc):
                     min_alpha=255, width=3000, height=2000,
                     streams=[hv.streams.RangeXY(transient=True)])      
 
-    def date_update(attrname, old, new):
-        print(new)
+    def startdate_update(attrname, old, new):
+        global glob_var 
+        glob_var['syear'] = new.year
+        glob_var['smonth'] = new.month
+        glob_var['sday'] = new.day
 
-    def time_update(attrname, old, new):
-        print(new)
+    def enddate_update(attrname, old, new):
+        global glob_var
+        glob_var['eyear'] = new.year
+        glob_var['emonth'] = new.month
+        glob_var['eday'] = new.day
+
+    def starttime_update(attrname, old, new):
+        global glob_var
+        h,m,s = map(int, new.split(':'))
+        glob_var['shour'] = h
+        glob_var['sminute'] = m
+        glob_var['ssecond'] = s
+
+    def endtime_update(attrname, old, new):
+        global glob_var
+        h,m,s = map(int, new.split(':'))
+        glob_var['ehour'] = h
+        glob_var['eminute'] = m
+        glob_var['esecond'] = s
+
+    def update_target(attrname, old, new):
+        global glob_var
+        glob_var['target'] = new.lower()
 
     def update():
-        start = UTCDateTime(2012,11,21,0,20)
-        end = start + 20*60.
-        print(start, end)
-        dm.event(start=start, end=end)
+        start = UTCDateTime(glob_var['syear'], glob_var['smonth'],
+                            glob_var['sday'], glob_var['shour'],
+                            glob_var['sminute'], glob_var['ssecond'])
+        end = UTCDateTime(glob_var['eyear'], glob_var['emonth'],
+                            glob_var['eday'], glob_var['ehour'],
+                            glob_var['eminute'], glob_var['esecond'])
+        print(glob_var['target'], start, end)
+        dm.event(start=start, end=end, target=glob_var['target'])
 
     date_start = DatePicker(title='Start date')
-    date_start.on_change('value', date_update)
+    date_start.on_change('value', startdate_update)
     date_end = DatePicker(title='End date')
-    date_end.on_change('value', date_update)
+    date_end.on_change('value', enddate_update)
     starttime = TextInput(title='Start time', value='HH:MM:SS')
-    starttime.on_change('value', time_update)
+    starttime.on_change('value', starttime_update)
     endtime = TextInput(title='End time', value='HH:MM:SS')
-    endtime.on_change('value', time_update)
+    endtime.on_change('value', endtime_update)
     
     updateb = Button(label='Update', width=60)
     updateb.on_click(update)
     
+    select_target = Select(title="Volcano:", value="Tongariro", options=["Tongariro", "Ruapehu"])
+    select_target.on_change('value', update_target)
+
     # Create HoloViews plot and attach the document
     lyt = lyt.opts(plot=dict(width=3000, height=2000, finalize_hooks=[apply_axis_formatter]),
                    norm=dict(framewise=True))
     hvplot = renderer.get_plot(lyt, doc)
-    doc.add_root(layout([[hvplot.state], [[date_start, starttime], [date_end, endtime], [updateb]]], sizing_mode='fixed'))
+    doc.add_root(layout([[hvplot.state], [[date_start, starttime], 
+                                          [date_end, endtime], 
+                                          [updateb, select_target]]], sizing_mode='fixed'))
     return doc
 
 doc = modify_doc(curdoc())
