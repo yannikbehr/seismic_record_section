@@ -1,9 +1,10 @@
+from functools import partial
 import holoviews as hv
 from holoviews.operation.datashader import datashade
 from holoviews.streams import Stream as HVStream
 import warnings
 import bokeh
-from bokeh.layouts import layout
+from bokeh.layouts import layout, widgetbox
 from bokeh.plotting import figure, show, curdoc
 from bokeh.models import (FuncTickFormatter, 
                       DatetimeTickFormatter,
@@ -13,7 +14,9 @@ from bokeh.models import (FuncTickFormatter,
 from bokeh.models import (DatePicker, 
                           TextInput, 
                           Button,
-                          Select)
+                          Select,
+                          PreText)
+from bokeh.driving import count
 import datashader as ds
 from obspy.clients.fdsn import Client
 from obspy.clients.fdsn.header import FDSNException, FDSNNoDataException
@@ -48,6 +51,18 @@ acoustic = [('COVZ', '30', 'HDF'), ('IVVZ', '30', 'HDF'),
 arc_client = Client('http://service.geonet.org.nz')
 nrt_client = Client('http://beta-service-nrt.geonet.org.nz')
 
+doc = curdoc()
+
+text = ['Program startup\n']
+pre = PreText(text='Program startup', width=500, height=100)
+
+@count()
+def update_log(t):
+    global text
+    if len(text) > 50:
+        text.pop(0)
+    pre.text = ''.join(text) 
+
 
 def GeoNetFDSNrequest(date1, date2, net, sta, loc, cmp):
     """
@@ -69,6 +84,7 @@ def GeoNetFDSNrequest(date1, date2, net, sta, loc, cmp):
 
 
 def get_data(stations, target, tstart, tend, prefix, new=False):
+    global text
     fout = os.path.join('/tmp','_'.join((prefix,str(target[0]),str(target[1]),str(tstart),str(tend))))
     g = Geod(ellps='WGS84')
     st = Stream()
@@ -79,7 +95,8 @@ def get_data(stations, target, tstart, tend, prefix, new=False):
     else:     
         for s, loc, cmp in stations:
             try:
-                print(s, str(loc), cmp, tstart, tend)
+                msg = "Downloading {:s}.{:s}.{:s}\n".format(s, str(loc), cmp)
+                text.append(msg)
                 st_tmp, inv = GeoNetFDSNrequest(tstart, tend, 'NZ', s, str(loc), cmp)
             except FDSNException:
                 print('No data for {}.{}'.format(s,cmp))
@@ -229,37 +246,58 @@ def modify_doc(doc):
         glob_var['target'] = new.lower()
 
     def update():
+        global text
         start = UTCDateTime(glob_var['syear'], glob_var['smonth'],
                             glob_var['sday'], glob_var['shour'],
                             glob_var['sminute'], glob_var['ssecond'])
         end = UTCDateTime(glob_var['eyear'], glob_var['emonth'],
                             glob_var['eday'], glob_var['ehour'],
                             glob_var['eminute'], glob_var['esecond'])
-        print(glob_var['target'], start, end)
+        msg = "Loading data for {:s} between {:s} and {:s}\n".format(glob_var['target'], str(start), str(end))
+        text.append(msg)
         dm.event(start=start, end=end, target=glob_var['target'])
+        text.append("Loading finished.")
 
-    date_start = DatePicker(title='Start date')
+    sdateval = "{:d}-{:d}-{:d}".format(glob_var['syear'],
+                                       glob_var['smonth'],
+                                       glob_var['sday'])
+    date_start = DatePicker(title='Start date', value=sdateval)
     date_start.on_change('value', startdate_update)
-    date_end = DatePicker(title='End date')
+
+    edateval = "{:d}-{:d}-{:d}".format(glob_var['eyear'],
+                                       glob_var['emonth'],
+                                       glob_var['eday'])
+    date_end = DatePicker(title='End date', value=edateval)
     date_end.on_change('value', enddate_update)
-    starttime = TextInput(title='Start time', value='HH:MM:SS')
+    
+    stimeval = "{:02d}:{:02d}:{:02d}".format(glob_var['shour'],
+                                       glob_var['sminute'],
+                                       glob_var['ssecond'])
+    starttime = TextInput(title='Start time', value=stimeval)
     starttime.on_change('value', starttime_update)
-    endtime = TextInput(title='End time', value='HH:MM:SS')
+
+    etimeval = "{:02d}:{:02d}:{:02d}".format(glob_var['ehour'],
+                                       glob_var['eminute'],
+                                       glob_var['esecond'])
+
+    endtime = TextInput(title='End time', value=etimeval)
     endtime.on_change('value', endtime_update)
     
-    updateb = Button(label='Update', width=60)
+    updateb = Button(label='Update', button_type='success')
     updateb.on_click(update)
     
-    select_target = Select(title="Volcano:", value="Tongariro", options=["Tongariro", "Ruapehu"])
+    select_target = Select(title='Volcano', value="Tongariro", options=["Tongariro", "Ruapehu"])
     select_target.on_change('value', update_target)
 
     # Create HoloViews plot and attach the document
     lyt = lyt.opts(plot=dict(width=3000, height=2000, finalize_hooks=[apply_axis_formatter]),
                    norm=dict(framewise=True))
     hvplot = renderer.get_plot(lyt, doc)
-    doc.add_root(layout([[hvplot.state], [[date_start, starttime], 
-                                          [date_end, endtime], 
-                                          [updateb, select_target]]], sizing_mode='fixed'))
+    doc.add_root(layout([[hvplot.state, widgetbox(pre)], 
+                         [widgetbox(date_start, starttime), 
+                          widgetbox(date_end, endtime),
+                          widgetbox(select_target, updateb)]], sizing_mode='fixed'))
     return doc
 
-doc = modify_doc(curdoc())
+doc.add_periodic_callback(update_log, 200)
+doc = modify_doc(doc)
