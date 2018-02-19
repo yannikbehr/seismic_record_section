@@ -30,6 +30,7 @@ import numpy as np
 import pandas as pd
 import os
 import pickle
+import time
 
 
 warnings.filterwarnings('ignore')
@@ -122,6 +123,9 @@ class RecordSection:
         self.streams = {'seismic': Stream(), 'acoustic': Stream()}
         self.targets = {'tongariro': (175.671854359, -39.107850505),
                         'ruapehu': (175.564490, -39.281149)}
+        self.end = UTCDateTime(2018,2,11,1,15,00)
+        self.start = self.end - 10*60.
+        self.target = 'tongariro'
         self.curves = {}
 
     def reset(self):
@@ -131,11 +135,10 @@ class RecordSection:
         self.streams = {'seismic': Stream(), 'acoustic': Stream()}
         self.curves = {}
 
-    def build_record_section(self, start, end, target, red_vel=0., new=False):
+    def build_record_section(self, red_vel=0., new=False):
         g = Geod(ellps='WGS84')
-        tlon, tlat = self.targets[target]
+        tlon, tlat = self.targets[self.target]
         for tr in self.streams['seismic']:
-            print("plotting trace {}".format(tr.stats.station))
             _lat = tr.stats.coordinates.latitude
             _lon = tr.stats.coordinates.longitude
             _,_,d = g.inv(tlon, tlat, _lon, _lat)
@@ -152,7 +155,6 @@ class RecordSection:
             self.curves[(tr.stats.station, 'seismic')]  = hv.Curve((idates, data-d/1e3))
      
         for tr in self.streams['acoustic']:
-            print("plotting trace {}".format(tr.stats.station))
             _lat = tr.stats.coordinates.latitude
             _lon = tr.stats.coordinates.longitude
             _,_,d = g.inv(tlon, tlat, _lon, _lat)
@@ -173,6 +175,7 @@ class RecordSection:
 
 hv.extension('bokeh')
 hv.output(size=30)
+renderer = hv.renderer('bokeh').instance(mode='server')
 
 
 def apply_axis_formatter(plot, element):
@@ -184,26 +187,6 @@ def apply_axis_formatter(plot, element):
     plot.handles['xaxis'].axis_label = "UTC time [min]"
     plot.handles['yaxis'].axis_label = "Distance [km]"
    
-renderer = hv.renderer('bokeh').instance(mode='server')
-
-end = UTCDateTime(2018,2,11,1,15,00)
-start = end - 10*60.
-target = 'tongariro'
-
-glob_var = {'syear': start.year,
-            'smonth': start.month,
-            'sday': start.day,
-            'shour': start.hour,
-            'sminute': start.minute,
-            'ssecond': start.second,
-            'eyear': end.year,
-            'emonth': end.month,
-            'eday': end.day,
-            'ehour': end.hour,
-            'eminute': end.minute,
-            'esecond': end.second,
-            'target': target}
-
 
 def modify_doc(doc):
 
@@ -219,22 +202,15 @@ def modify_doc(doc):
     #tstart = UTCDateTime(2007,9,25,8,26)
     #tend = tstart + 10*60.
      
-    start = UTCDateTime(glob_var['syear'], glob_var['smonth'],
-                        glob_var['sday'], glob_var['shour'],
-                        glob_var['sminute'], glob_var['ssecond'])
-    end = UTCDateTime(glob_var['eyear'], glob_var['emonth'],
-                        glob_var['eday'], glob_var['ehour'],
-                        glob_var['eminute'], glob_var['esecond'])
-
-    update_data = HVStream.define('update_date', target=target, start=start, end=end)
     rs = RecordSection()
+    update_data = HVStream.define('update_data')
     for _type in ['seismic', 'acoustic']:
-        for slc in stations[glob_var['target']][_type]:
+        for slc in stations[rs.target][_type]:
             s, l, c = slc
             msg = "Downloading {:s}.{:s}.{:s}\n".format(s, l, c)
             text.append(msg)
             print(msg)
-            tr = get_data(s, l, c, start, end)
+            tr = get_data(s, l, c, rs.start, rs.end)
             if tr is not None: 
                 rs.streams[_type] += tr
             else:
@@ -250,97 +226,90 @@ def modify_doc(doc):
                     streams=[hv.streams.RangeXY(transient=True)])      
 
     def startdate_update(attrname, old, new):
-        global glob_var 
-        glob_var['syear'] = new.year
-        glob_var['smonth'] = new.month
-        glob_var['sday'] = new.day
+        rs.start.year = new.year
+        rs.start.month = new.month
+        rs.start.day = new.day
 
     def enddate_update(attrname, old, new):
-        global glob_var
-        glob_var['eyear'] = new.year
-        glob_var['emonth'] = new.month
-        glob_var['eday'] = new.day
+        rs.end.year = new.year
+        rs.end.month = new.month
+        rs.end.day = new.day
 
     def starttime_update(attrname, old, new):
-        global glob_var
         h,m,s = map(int, new.split(':'))
-        glob_var['shour'] = h
-        glob_var['sminute'] = m
-        glob_var['ssecond'] = s
+        rs.start.hour = h
+        rs.start.minute = m
+        rs.start.second = s
 
     def endtime_update(attrname, old, new):
-        global glob_var
         h,m,s = map(int, new.split(':'))
-        glob_var['ehour'] = h
-        glob_var['eminute'] = m
-        glob_var['esecond'] = s
+        rs.end.hour = h
+        rs.end.minute = m
+        rs.end.second = s
 
     def update_target(attrname, old, new):
-        global glob_var
-        glob_var['target'] = new.lower()
+        rs.target = new.lower()
 
     @gen.coroutine
-    def update_plot(start, end):
+    def update_plot():
         global text
         while len(text) > 50:
             text.pop(0)
         pre.text = ''.join(text) 
-        dm.event(start=start, end=end, target=glob_var['target'])
+        dm.event()
 
 
     @gen.coroutine
     @without_document_lock
     def update():
         global text
-        executor = ThreadPoolExecutor(max_workers=2)
-        start = UTCDateTime(glob_var['syear'], glob_var['smonth'],
-                            glob_var['sday'], glob_var['shour'],
-                            glob_var['sminute'], glob_var['ssecond'])
-        end = UTCDateTime(glob_var['eyear'], glob_var['emonth'],
-                            glob_var['eday'], glob_var['ehour'],
-                            glob_var['eminute'], glob_var['esecond'])
-        msg = "Loading data for {:s} between {:s} and {:s}\n".format(glob_var['target'], str(start), str(end))
+        executor = ThreadPoolExecutor(max_workers=4)
+        msg = "Loading data for {:s} between {:s} and {:s}\n".format(rs.target, str(rs.start), str(rs.end))
+        text.append(msg)
+        print(msg)
         rs.reset()
         for _type in ['seismic', 'acoustic']:
-            for slc in stations[glob_var['target']][_type]:
+            for slc in stations[rs.target][_type]:
                 s, l, c = slc
                 msg = "Downloading {:s}.{:s}.{:s}\n".format(s, l, c)
                 text.append(msg)
-                tr = yield executor.submit(get_data, s, l, c, start, end)
+                tr = yield executor.submit(get_data, s, l, c, rs.start, rs.end)
                 if tr is not None:
                     rs.streams[_type] += tr
                 else:
                     msg = 'No data for {}.{}.{}\n'.format(s, l, c)
                     text.append(msg)
-                doc.add_next_tick_callback(partial(update_plot, start=start, end=end))
+                # The sleep has to be added to prevent some kind of racing condition
+                # in the underlying bokeh implementation
+                time.sleep(0.1)
+                doc.add_next_tick_callback(update_plot)
         text.append("Loading finished.\n")
 
-    sdateval = "{:d}-{:d}-{:d}".format(glob_var['syear'],
-                                       glob_var['smonth'],
-                                       glob_var['sday'])
+    sdateval = "{:d}-{:d}-{:d}".format(rs.start.year,
+                                       rs.start.month,
+                                       rs.start.day)
     date_start = DatePicker(title='Start date', value=sdateval)
     date_start.on_change('value', startdate_update)
 
-    edateval = "{:d}-{:d}-{:d}".format(glob_var['eyear'],
-                                       glob_var['emonth'],
-                                       glob_var['eday'])
+    edateval = "{:d}-{:d}-{:d}".format(rs.end.year,
+                                       rs.end.month,
+                                       rs.end.day)
     date_end = DatePicker(title='End date', value=edateval)
     date_end.on_change('value', enddate_update)
     
-    stimeval = "{:02d}:{:02d}:{:02d}".format(glob_var['shour'],
-                                       glob_var['sminute'],
-                                       glob_var['ssecond'])
+    stimeval = "{:02d}:{:02d}:{:02d}".format(rs.start.hour,
+                                             rs.start.minute,
+                                             rs.start.second)
     starttime = TextInput(title='Start time', value=stimeval)
     starttime.on_change('value', starttime_update)
 
-    etimeval = "{:02d}:{:02d}:{:02d}".format(glob_var['ehour'],
-                                       glob_var['eminute'],
-                                       glob_var['esecond'])
-
+    etimeval = "{:02d}:{:02d}:{:02d}".format(rs.end.hour,
+                                             rs.end.minute,
+                                             rs.end.second)
     endtime = TextInput(title='End time', value=etimeval)
     endtime.on_change('value', endtime_update)
     
-    updateb = Button(label='Update', button_type='success')
+    updateb = Button(label='Update/Reset', button_type='success')
     updateb.on_click(update)
     
     select_target = Select(title='Volcano', value="Tongariro", options=["Tongariro", "Ruapehu"])
