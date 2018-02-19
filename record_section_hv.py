@@ -249,6 +249,7 @@ def modify_doc(doc):
 
     def update_target(attrname, old, new):
         rs.target = new.lower()
+        dm.event()
 
     @gen.coroutine
     def update_plot():
