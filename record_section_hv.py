@@ -286,6 +286,9 @@ def modify_doc(doc):
                 doc.add_next_tick_callback(update_plot)
         text.append("Loading finished.\n")
 
+    def reset():
+        dm.event()
+
     sdateval = "{:d}-{:d}-{:d}".format(rs.start.year,
                                        rs.start.month,
                                        rs.start.day)
@@ -310,8 +313,11 @@ def modify_doc(doc):
     endtime = TextInput(title='End time', value=etimeval)
     endtime.on_change('value', endtime_update)
     
-    updateb = Button(label='Update/Reset', button_type='success')
+    updateb = Button(label='Update', button_type='success')
     updateb.on_click(update)
+    
+    resetb = Button(label='Reset', button_type='success')
+    resetb.on_click(reset)
     
     select_target = Select(title='Volcano', value="Tongariro", options=["Tongariro", "Ruapehu"])
     select_target.on_change('value', update_target)
@@ -323,7 +329,7 @@ def modify_doc(doc):
     doc.add_root(layout([[hvplot.state, widgetbox(pre)], 
                          [widgetbox(date_start, starttime), 
                           widgetbox(date_end, endtime),
-                          widgetbox(select_target, updateb)]], sizing_mode='fixed'))
+                          widgetbox(select_target, updateb, resetb)]], sizing_mode='fixed'))
     return doc
 
 doc = modify_doc(doc)
