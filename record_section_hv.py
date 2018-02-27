@@ -1,25 +1,26 @@
-from functools import partial
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+import os
+import pickle
+import time
+import warnings
+
 import holoviews as hv
 from holoviews.operation.datashader import datashade
-from holoviews.streams import Stream as HVStream
-import warnings
+from holoviews import streams
 import bokeh
 from bokeh.layouts import layout, widgetbox
-from bokeh.plotting import figure, show, curdoc
+from bokeh.plotting import curdoc
 from bokeh.models import (FuncTickFormatter, 
-                      DatetimeTickFormatter,
-                      Range1d,
-                      HoverTool, 
-                      ColumnDataSource)
-from bokeh.models import (DatePicker, 
+                          DatetimeTickFormatter,
+                          DatePicker, 
                           TextInput, 
                           Button,
                           Select,
                           PreText)
-from tornado import gen
-from bokeh.driving import count
 from bokeh.document import without_document_lock
+import param
+from tornado import gen
 import datashader as ds
 from obspy.clients.fdsn import Client
 from obspy.clients.fdsn.header import FDSNException, FDSNNoDataException
@@ -28,9 +29,6 @@ from obspy.core.util import AttribDict
 from pyproj import Geod
 import numpy as np
 import pandas as pd
-import os
-import pickle
-import time
 
 
 warnings.filterwarnings('ignore')
@@ -117,14 +115,41 @@ doc = curdoc()
 text = ['Program startup\n']
 pre = PreText(text='Program startup', width=500, height=100)
 
+def apply_axis_formatter(plot, element):
+    plot.handles['xaxis'].formatter = bokeh.models.DatetimeTickFormatter(hourmin = '%H:%M', 
+                                                                         minutes='%H:%M', 
+                                                                         minsec='%H:%M:%S',
+                                                                         seconds='%H:%M:%S')
+    plot.handles['yaxis'].formatter = FuncTickFormatter(code="""return Math.abs(tick)""")
+    plot.handles['xaxis'].axis_label = "UTC time [min]"
+    plot.handles['yaxis'].axis_label = "Distance [km]"
+
+
 class RecordSection:
 
     def __init__(self):
         self.streams = {'seismic': Stream(), 'acoustic': Stream()}
         self.targets = {'tongariro': (175.671854359, -39.107850505),
                         'ruapehu': (175.564490, -39.281149)}
-        self.end = UTCDateTime(2018,2,11,1,15,00)
-        self.start = self.end - 10*60.
+        #end = UTCDateTime(2018,2,11,1,15,00)
+        #end = UTCDateTime.utcnow()
+        # 1st Te Maari eruption
+        #start = UTCDateTime(2012,8,6,11,40)
+        #end = start + 20*60.
+        # 2nd Te Maari eruption
+        #start = UTCDateTime(2012,11,21,0,20)
+        #end = tstart + 20*60.
+        # 2007 Ruapehu eruption
+        #tstart = UTCDateTime(2007,9,25,8,26)
+        #tend = tstart + 10*60.
+        self.end = UTCDateTime(2012,8,6,12,00,00)
+        self.start = self.end - 20*60.
+        self.min_dist = 0.
+        self.max_dist = 50.
+        self.tmin_old = self.start
+        self.tmax_old = self.end
+        self.ymin_old = self.min_dist
+        self.ymax_old = self.max_dist 
         self.target = 'tongariro'
         self.curves = {}
 
@@ -134,76 +159,124 @@ class RecordSection:
         """
         self.streams = {'seismic': Stream(), 'acoustic': Stream()}
         self.curves = {}
+        
+    def build_record_section(self, x_range=None, y_range=None, replot=False,
+                             red_vel=0., new=False):
+        tmin = None
+        tmax = None
+        if x_range is not None:
+            xmin, xmax = x_range
+            tmin = datetime.utcfromtimestamp(xmin/1e3)
+            tmax = datetime.utcfromtimestamp(xmax/1e3)
+            self.tmin_old = tmin
+            self.tmax_old = tmax
+        else:
+            tmin = self.tmin_old
+            tmax = self.tmax_old
 
-    def build_record_section(self, red_vel=0., new=False):
+        if y_range is not None:
+            ymax = abs(min(0, y_range[0]))
+            ymin = abs(min(0, y_range[1]))
+            self.ymin_old = ymin
+            self.ymax_old = ymax
+        else:
+            ymin = self.ymin_old
+            ymax = self.ymax_old
+            y_range = (-ymax, -ymin)
+
+        if replot:
+            tmin = None
+            tmax = None
+            xmin = np.datetime64(self.start.datetime).astype(np.int)//1e3
+            xmax = np.datetime64(self.end.datetime).astype(np.int)//1e3
+            x_range=(xmin,xmax)
+            ymin = self.min_dist
+            ymax = self.max_dist
+            y_range = (-ymax, -ymin)
+
         g = Geod(ellps='WGS84')
         tlon, tlat = self.targets[self.target]
-        for tr in self.streams['seismic']:
-            _lat = tr.stats.coordinates.latitude
-            _lon = tr.stats.coordinates.longitude
-            _,_,d = g.inv(tlon, tlat, _lon, _lat)
-            data = tr.data[:].astype(np.float)
-            data /= data.max()
-            try:
-                id0 = int(d/(red_vel*tr.stats.delta))
-            except ZeroDivisionError:
-                id0 = 0
-            data = data[id0:]
-            times = np.arange(data.size)*(tr.stats.delta*1e3)
-            dates = np.datetime64(tr.stats.starttime.datetime)+times.astype('timedelta64[ms]')
-            idates = np.array(dates.astype(np.int) // 10**3).astype(np.float)
-            self.curves[(tr.stats.station, 'seismic')]  = hv.Curve((idates, data-d/1e3))
-     
-        for tr in self.streams['acoustic']:
-            _lat = tr.stats.coordinates.latitude
-            _lon = tr.stats.coordinates.longitude
-            _,_,d = g.inv(tlon, tlat, _lon, _lat)
-            data = tr.data[:].astype(np.float)
-            data /= data.max()
-            try:
-                id0 = int(d/(red_vel*tr.stats.delta))
-            except ZeroDivisionError:
-                id0 = 0
-            data = data[id0:]
-            times = np.arange(data.size)*(tr.stats.delta*1e3)
-            dates = np.datetime64(tr.stats.starttime.datetime)+times.astype('timedelta64[ms]')
-            idates = np.array(dates.astype(np.int) // 10**3).astype(np.float)
-            self.curves[(tr.stats.station,'acoustic')] = hv.Curve((idates, data-d/1e3))
+        st_seismic = self.streams['seismic'].copy()
+        st_acoustic = self.streams['acoustic'].copy()
+
+        if None not in [tmin, tmax]:
+            starttime = UTCDateTime(tmin)
+            endtime = UTCDateTime(tmax)
+            st_seismic.trim(starttime, endtime)
+            st_acoustic.trim(starttime, endtime)
+        print(tmin, tmax, ymin, ymax)
+
+        if st_seismic.count() > 0:
+            local_max_s = 0.
+            for tr in st_seismic:
+                _lat = tr.stats.coordinates.latitude
+                _lon = tr.stats.coordinates.longitude
+                _,_,d = g.inv(tlon, tlat, _lon, _lat)
+                if d/1e3 >= ymin and d/1e3 <= ymax:
+                    local_max_s = max(local_max_s, tr.data.max())
+                tr.stats.distance = d/1e3
+
+            for tr in st_seismic:
+                if tr.stats.distance < ymin or tr.stats.distance > ymax:
+                    continue
+                data = tr.data[:].astype(np.float)
+                data /= local_max_s
+                try:
+                    id0 = int(d/(red_vel*tr.stats.delta))
+                except ZeroDivisionError:
+                    id0 = 0
+                data = data[id0:]
+                times = np.arange(data.size)*(tr.stats.delta*1e3)
+                dates = np.datetime64(tr.stats.starttime.datetime)+times.astype('timedelta64[ms]')
+                idates = np.array(dates.astype(np.int) // 10**3).astype(np.float)
+                self.curves[(tr.stats.station, 'seismic')]  = hv.Curve((idates, data-tr.stats.distance))
             
-        return hv.NdOverlay(self.curves, kdims=['name', 'type']) 
+
+        if st_acoustic.count() > 0: 
+            local_max_a = 0.
+            for tr in st_acoustic:
+                _lat = tr.stats.coordinates.latitude
+                _lon = tr.stats.coordinates.longitude
+                _,_,d = g.inv(tlon, tlat, _lon, _lat)
+                if d/1e3 >= ymin and d/1e3 <= ymax:
+                    local_max_a = max(local_max_a, tr.data.max())
+                tr.stats.distance = d/1e3   
+
+            for tr in st_acoustic:
+                if tr.stats.distance < ymin or tr.stats.distance > ymax:
+                    continue
+                data = tr.data[:].astype(np.float)
+                data /= local_max_a 
+                try:
+                    id0 = int(d/(red_vel*tr.stats.delta))
+                except ZeroDivisionError:
+                    id0 = 0
+                data = data[id0:]
+                times = np.arange(data.size)*(tr.stats.delta*1e3)
+                dates = np.datetime64(tr.stats.starttime.datetime)+times.astype('timedelta64[ms]')
+                idates = np.array(dates.astype(np.int) // 10**3).astype(np.float)
+                self.curves[(tr.stats.station,'acoustic')] = hv.Curve((idates, data-tr.stats.distance))
+            
+        color_key = {'seismic': 'blue', 'acoustic': 'red'}    
+        lyt = datashade(hv.NdOverlay(self.curves, kdims=['name', 'type']),
+                        aggregator=ds.count_cat('type'),
+                        color_key=color_key, dynamic=False, 
+                        min_alpha=255, width=3000, height=2000, x_range=x_range, y_range=y_range,
+                        y_sampling=0.1)      
+        lyt = lyt.opts(plot=dict(width=3000, height=2000, finalize_hooks=[apply_axis_formatter]),
+                       norm=dict(framewise=True))
+        return lyt 
 
 
 hv.extension('bokeh')
 hv.output(size=30)
 renderer = hv.renderer('bokeh').instance(mode='server')
 
-
-def apply_axis_formatter(plot, element):
-    plot.handles['xaxis'].formatter = bokeh.models.DatetimeTickFormatter(hourmin = '%H:%M', 
-                                                                         minutes='%H:%M', 
-                                                                         minsec='%H:%M:%S',
-                                                                         seconds='%H:%M:%S')
-    plot.handles['yaxis'].formatter = FuncTickFormatter(code="""return Math.abs(tick)""")
-    plot.handles['xaxis'].axis_label = "UTC time [min]"
-    plot.handles['yaxis'].axis_label = "Distance [km]"
-   
-
 def modify_doc(doc):
 
-    #end = UTCDateTime(2018,2,11,1,15,00)
-    #end = UTCDateTime.utcnow()
-    # 1st Te Maari eruption
-    #start = UTCDateTime(2012,8,6,11,40)
-    #end = start + 20*60.
-    # 2nd Te Maari eruption
-    #start = UTCDateTime(2012,11,21,0,20)
-    #end = tstart + 20*60.
-    # 2007 Ruapehu eruption
-    #tstart = UTCDateTime(2007,9,25,8,26)
-    #tend = tstart + 10*60.
-     
+    
     rs = RecordSection()
-    update_data = HVStream.define('update_data')
+    update_data = streams.Stream.define('update_data', replot=False)
     for _type in ['seismic', 'acoustic']:
         for slc in stations[rs.target][_type]:
             s, l, c = slc
@@ -218,13 +291,8 @@ def modify_doc(doc):
                 text.append(msg)
                 print(msg)
     
-    dm = hv.DynamicMap(rs.build_record_section, streams=[update_data(transient=True)])
-    color_key = {'seismic': 'blue', 'acoustic': 'red'}    
-    lyt = datashade(dm, aggregator=ds.count_cat('type'),
-                    color_key=color_key, 
-                    min_alpha=255, width=3000, height=2000,
-                    streams=[hv.streams.RangeXY(transient=True)])      
-
+    dm = hv.DynamicMap(rs.build_record_section, streams=[update_data(transient=True),
+                                                         streams.RangeXY(transient=False)])
     def startdate_update(attrname, old, new):
         rs.start.year = new.year
         rs.start.month = new.month
@@ -257,7 +325,7 @@ def modify_doc(doc):
         while len(text) > 50:
             text.pop(0)
         pre.text = ''.join(text) 
-        dm.event()
+        dm.event(replot=True)
 
 
     @gen.coroutine
@@ -280,6 +348,8 @@ def modify_doc(doc):
                 else:
                     msg = 'No data for {}.{}.{}\n'.format(s, l, c)
                     text.append(msg)
+                    time.sleep(0.1)
+                    continue
                 # The sleep has to be added to prevent some kind of racing condition
                 # in the underlying bokeh implementation
                 time.sleep(0.1)
@@ -287,7 +357,7 @@ def modify_doc(doc):
         text.append("Loading finished.\n")
 
     def reset():
-        dm.event()
+        dm.event(replot=True)
 
     sdateval = "{:d}-{:d}-{:d}".format(rs.start.year,
                                        rs.start.month,
@@ -323,9 +393,7 @@ def modify_doc(doc):
     select_target.on_change('value', update_target)
 
     # Create HoloViews plot and attach the document
-    lyt = lyt.opts(plot=dict(width=3000, height=2000, finalize_hooks=[apply_axis_formatter]),
-                   norm=dict(framewise=True))
-    hvplot = renderer.get_plot(lyt, doc)
+    hvplot = renderer.get_plot(dm, doc)
     doc.add_root(layout([[hvplot.state, widgetbox(pre)], 
                          [widgetbox(date_start, starttime), 
                           widgetbox(date_end, endtime),
