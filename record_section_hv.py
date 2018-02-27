@@ -48,10 +48,14 @@ tnp_acoustic = [('COVZ', '30', 'HDF'), ('IVVZ', '30', 'HDF'),
                 ('KRVZ', '30', 'HDF'), ('OTVZ', '30', 'HDF'),
                 ('WTVZ', '30', 'HDF')]
 stations = {}
-stations['tongariro'] = {'seismic':tnp_seismic,
+stations['te maari'] = {'seismic':tnp_seismic,
                          'acoustic':tnp_acoustic}
 stations['ruapehu'] = {'seismic':tnp_seismic,
                        'acoustic':tnp_acoustic}
+stations['red crater'] = {'seismic':tnp_seismic,
+                         'acoustic':tnp_acoustic}
+stations['ngauruhoe'] = {'seismic':tnp_seismic,
+                         'acoustic':tnp_acoustic}
 
 def GeoNetFDSNrequest(date1, date2, net, sta, loc, cmp):
     """
@@ -126,11 +130,16 @@ def apply_axis_formatter(plot, element):
 
 
 class RecordSection:
-
+    """
+    Construct the record section and save the state of the plot.
+    """
     def __init__(self):
         self.streams = {'seismic': Stream(), 'acoustic': Stream()}
-        self.targets = {'tongariro': (175.671854359, -39.107850505),
-                        'ruapehu': (175.564490, -39.281149)}
+        # (175.671854359, -39.107850505)
+        self.targets = {'te maari': (175.670744, -39.109752),
+                        'ruapehu': (175.564490, -39.281149),
+                        'ngauruhoe': (175.632169, -39.156791),
+                        'red crater': (175.650761, -39.136715)}
         #end = UTCDateTime(2018,2,11,1,15,00)
         #end = UTCDateTime.utcnow()
         # 1st Te Maari eruption
@@ -150,7 +159,7 @@ class RecordSection:
         self.tmax_old = self.end
         self.ymin_old = self.min_dist
         self.ymax_old = self.max_dist 
-        self.target = 'tongariro'
+        self.target = 'te maari'
         self.curves = {}
 
     def reset(self):
@@ -217,7 +226,10 @@ class RecordSection:
                 tr.stats.distance = d/1e3
 
             for tr in st_seismic:
+                key = (tr.stats.station, 'seismic')
                 if tr.stats.distance < ymin or tr.stats.distance > ymax:
+                    if key in self.curves:
+                        self.curves.pop(key)
                     continue
                 data = tr.data[:].astype(np.float)
                 data /= local_max_s
@@ -229,7 +241,7 @@ class RecordSection:
                 times = np.arange(data.size)*(tr.stats.delta*1e3)
                 dates = np.datetime64(tr.stats.starttime.datetime)+times.astype('timedelta64[ms]')
                 idates = np.array(dates.astype(np.int) // 10**3).astype(np.float)
-                self.curves[(tr.stats.station, 'seismic')]  = hv.Curve((idates, data-tr.stats.distance))
+                self.curves[key]  = hv.Curve((idates, data-tr.stats.distance))
             
 
         if st_acoustic.count() > 0: 
@@ -243,7 +255,10 @@ class RecordSection:
                 tr.stats.distance = d/1e3   
 
             for tr in st_acoustic:
+                key = (tr.stats.station, 'acoustic')
                 if tr.stats.distance < ymin or tr.stats.distance > ymax:
+                    if key in self.curves:
+                        self.curves.pop(key)
                     continue
                 data = tr.data[:].astype(np.float)
                 data /= local_max_a 
@@ -255,7 +270,7 @@ class RecordSection:
                 times = np.arange(data.size)*(tr.stats.delta*1e3)
                 dates = np.datetime64(tr.stats.starttime.datetime)+times.astype('timedelta64[ms]')
                 idates = np.array(dates.astype(np.int) // 10**3).astype(np.float)
-                self.curves[(tr.stats.station,'acoustic')] = hv.Curve((idates, data-tr.stats.distance))
+                self.curves[key] = hv.Curve((idates, data-tr.stats.distance))
             
         color_key = {'seismic': 'blue', 'acoustic': 'red'}    
         lyt = datashade(hv.NdOverlay(self.curves, kdims=['name', 'type']),
@@ -273,7 +288,6 @@ hv.output(size=30)
 renderer = hv.renderer('bokeh').instance(mode='server')
 
 def modify_doc(doc):
-
     
     rs = RecordSection()
     update_data = streams.Stream.define('update_data', replot=False)
@@ -335,7 +349,6 @@ def modify_doc(doc):
         executor = ThreadPoolExecutor(max_workers=4)
         msg = "Loading data for {:s} between {:s} and {:s}\n".format(rs.target, str(rs.start), str(rs.end))
         text.append(msg)
-        print(msg)
         rs.reset()
         for _type in ['seismic', 'acoustic']:
             for slc in stations[rs.target][_type]:
@@ -389,7 +402,8 @@ def modify_doc(doc):
     resetb = Button(label='Reset', button_type='success')
     resetb.on_click(reset)
     
-    select_target = Select(title='Volcano', value="Tongariro", options=["Tongariro", "Ruapehu"])
+    select_target = Select(title='Volcano', value="Te Maari",
+                           options=["Te Maari", "Ruapehu", "Ngauruhoe", "Red Crater"])
     select_target.on_change('value', update_target)
 
     # Create HoloViews plot and attach the document
