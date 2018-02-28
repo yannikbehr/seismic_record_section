@@ -36,6 +36,6 @@ RUN conda install --quiet --yes \
 
 COPY record_section_hv.py /home/$NB_USER/
 
-CMD ["bokeh", "serve", "--port", "3000", "--show", "record_section_hv.py"]
+CMD ["bokeh", "serve", "--port", "3000", "--allow-websocket-origin", "vulkan.gns.cri.nz:3000", "--show", "record_section_hv.py"]
 
 
