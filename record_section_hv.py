@@ -17,7 +17,8 @@ from bokeh.models import (FuncTickFormatter,
                           TextInput, 
                           Button,
                           Select,
-                          PreText)
+                          PreText,
+                          CheckboxGroup)
 from bokeh.document import without_document_lock
 import param
 from tornado import gen
@@ -160,6 +161,9 @@ class RecordSection:
         self.ymax_old = self.max_dist 
         self.target = 'te maari'
         self.curves = {}
+        self.plot_acoustic = True
+        self.plot_seismic = True
+        self.plot_labels = False
 
     def reset(self):
         """
@@ -216,7 +220,7 @@ class RecordSection:
             st_acoustic.trim(starttime, endtime)
         print(tmin, tmax, ymin, ymax)
 
-        if st_seismic.count() > 0:
+        if st_seismic.count() > 0 and self.plot_seismic:
             local_max_s = 0.
             for tr in st_seismic:
                 _lat = tr.stats.coordinates.latitude
@@ -245,12 +249,18 @@ class RecordSection:
                 self.curves[key]  = hv.Curve((idates, data-tr.stats.distance))
                 if tr.stats.station not in stats_list:
                     stats_list.append(tr.stats.station)
+                    if self.plot_labels:
+                        label = tr.stats.station
+                    else:
+                        label = ''
                     labels.append(hv.Text(idates[100], -tr.stats.distance,
-                                          tr.stats.station, 
+                                          label, 
                                           halign='left',
                                           valign='bottom').opts(norm=dict(framewise=True)))           
+        if not self.plot_seismic:
+            self.curves = {k:self.curves[k] for k in self.curves if k[1] != "seismic"}
 
-        if st_acoustic.count() > 0: 
+        if st_acoustic.count() > 0 and self.plot_acoustic: 
             local_max_a = 0.
             for tr in st_acoustic:
                 _lat = tr.stats.coordinates.latitude
@@ -279,20 +289,26 @@ class RecordSection:
                 self.curves[key] = hv.Curve((idates, data-tr.stats.distance))
                 if tr.stats.station not in stats_list:
                     stats_list.append(tr.stats.station)
+                    if self.plot_labels:
+                        label = tr.stats.station
+                    else:
+                        label = ''
                     labels.append(hv.Text(idates[100], -tr.stats.distance,
-                                          tr.stats.station,
+                                          label,
                                           halign='left',
                                           valign='bottom').opts(norm=dict(framewise=True)))           
                
+        if not self.plot_acoustic:
+            self.curves = {k:self.curves[k] for k in self.curves if k[1] != "acoustic"}
+
         color_key = {'seismic': 'blue', 'acoustic': 'red'}    
         lyt = datashade(hv.NdOverlay(self.curves, kdims=['name', 'type']),
                         aggregator=ds.count_cat('type'),
                         color_key=color_key, dynamic=False, 
                         min_alpha=255, width=3000, height=2000, x_range=x_range, y_range=y_range,
                         y_sampling=0.1)      
-        
-        return (hv.Overlay(labels)*lyt).opts(plot=dict(width=3000, height=2000, 
-                                                       finalize_hooks=[apply_axis_formatter]),
+        return (lyt*hv.Overlay(labels)).opts(plot=dict(width=3000, height=2000, 
+                                                           finalize_hooks=[apply_axis_formatter]),
                                              norm=dict(framewise=True))
 
 
@@ -387,6 +403,19 @@ def modify_doc(doc):
     def reset():
         dm.event(replot=True)
 
+    def update_traces(attr, old, new):
+        rs.plot_seismic = False
+        rs.plot_acoustic = False
+        rs.plot_labels = False
+        for _c in new:
+            if _c == 0:
+                rs.plot_seismic = True
+            if _c == 1:
+                rs.plot_acoustic = True
+            if _c == 2:
+                rs.plot_labels = True
+        dm.event()
+
     sdateval = "{:d}-{:d}-{:d}".format(rs.start.year,
                                        rs.start.month,
                                        rs.start.day)
@@ -421,12 +450,15 @@ def modify_doc(doc):
                            options=["Te Maari", "Ruapehu", "Ngauruhoe", "Red Crater"])
     select_target.on_change('value', update_target)
 
+    cg = CheckboxGroup(labels=["Seismic", "Acoustic", "Station name"], active=[1, 1, 0])
+    cg.on_change('active', update_traces)
+
     # Create HoloViews plot and attach the document
     hvplot = renderer.get_plot(dm, doc)
     doc.add_root(layout([[hvplot.state, widgetbox(pre)], 
                          [widgetbox(date_start, starttime), 
                           widgetbox(date_end, endtime),
-                          widgetbox(select_target, updateb, resetb)]], sizing_mode='fixed'))
+                          widgetbox(select_target, updateb, resetb, cg)]], sizing_mode='fixed'))
     return doc
 
 doc = modify_doc(doc)
