@@ -135,7 +135,6 @@ class RecordSection:
     """
     def __init__(self):
         self.streams = {'seismic': Stream(), 'acoustic': Stream()}
-        # (175.671854359, -39.107850505)
         self.targets = {'te maari': (175.670744, -39.109752),
                         'ruapehu': (175.564490, -39.281149),
                         'ngauruhoe': (175.632169, -39.156791),
@@ -173,6 +172,8 @@ class RecordSection:
                              red_vel=0., new=False):
         tmin = None
         tmax = None
+        labels = []
+        stats_list = []
         if x_range is not None:
             xmin, xmax = x_range
             tmin = datetime.utcfromtimestamp(xmin/1e3)
@@ -242,7 +243,12 @@ class RecordSection:
                 dates = np.datetime64(tr.stats.starttime.datetime)+times.astype('timedelta64[ms]')
                 idates = np.array(dates.astype(np.int) // 10**3).astype(np.float)
                 self.curves[key]  = hv.Curve((idates, data-tr.stats.distance))
-            
+                if tr.stats.station not in stats_list:
+                    stats_list.append(tr.stats.station)
+                    labels.append(hv.Text(idates[100], -tr.stats.distance,
+                                          tr.stats.station, 
+                                          halign='left',
+                                          valign='bottom').opts(norm=dict(framewise=True)))           
 
         if st_acoustic.count() > 0: 
             local_max_a = 0.
@@ -271,16 +277,24 @@ class RecordSection:
                 dates = np.datetime64(tr.stats.starttime.datetime)+times.astype('timedelta64[ms]')
                 idates = np.array(dates.astype(np.int) // 10**3).astype(np.float)
                 self.curves[key] = hv.Curve((idates, data-tr.stats.distance))
-            
+                if tr.stats.station not in stats_list:
+                    stats_list.append(tr.stats.station)
+                    labels.append(hv.Text(idates[100], -tr.stats.distance,
+                                          tr.stats.station,
+                                          halign='left',
+                                          valign='bottom').opts(norm=dict(framewise=True)))           
+               
         color_key = {'seismic': 'blue', 'acoustic': 'red'}    
         lyt = datashade(hv.NdOverlay(self.curves, kdims=['name', 'type']),
                         aggregator=ds.count_cat('type'),
                         color_key=color_key, dynamic=False, 
                         min_alpha=255, width=3000, height=2000, x_range=x_range, y_range=y_range,
                         y_sampling=0.1)      
-        lyt = lyt.opts(plot=dict(width=3000, height=2000, finalize_hooks=[apply_axis_formatter]),
-                       norm=dict(framewise=True))
-        return lyt 
+        
+        return (hv.Overlay(labels)*lyt).opts(plot=dict(width=3000, height=2000, 
+                                                       finalize_hooks=[apply_axis_formatter]),
+                                             norm=dict(framewise=True))
+
 
 
 hv.extension('bokeh')
@@ -301,7 +315,7 @@ def modify_doc(doc):
             if tr is not None: 
                 rs.streams[_type] += tr
             else:
-                msg = 'No data for {}.{}.{}'.format(s, l, c)
+                msg = 'No data for {}.{}.{}\n'.format(s, l, c)
                 text.append(msg)
                 print(msg)
     
@@ -368,6 +382,7 @@ def modify_doc(doc):
                 time.sleep(0.1)
                 doc.add_next_tick_callback(update_plot)
         text.append("Loading finished.\n")
+        doc.add_next_tick_callback(update_plot)
 
     def reset():
         dm.event(replot=True)
