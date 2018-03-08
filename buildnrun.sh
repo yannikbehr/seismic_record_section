@@ -44,6 +44,8 @@ if [ "${RUNONLY}" == "false" ]; then
 fi
 
 if [ "${BUILDONLY}" == "false" ] ;then
+    docker stop rs
+    docker rm rs
     docker run --restart="unless-stopped" --name rs -p 3000:3000 -d yadabe/rs:$TAG 
 fi
 

@@ -19,20 +19,19 @@ USER $NB_USER
 # Install Python 3 packages
 # Remove pyqt and qt pulled in for matplotlib since we're only ever going to
 # use notebook-friendly backends in these images
-RUN conda install --quiet --yes \
-    'tornado=4.5*' \
-    'datashader=0.6*' \
-    'holoviews=1.9*' \
-    'param=1.5*' \
-    'pandas=0.20*' \
-    'numpy=1.13*' \
-    'scipy=1.0*' \
-    'bokeh=0.12*' \
-    'obspy=1.1*' \
-    'pyproj=1.9*' && \
+RUN conda install --quiet --yes -c pyviz \
+    pyviz &&\
     conda remove --quiet --yes --force qt pyqt && \
     conda clean -tipsy && \
     fix-permissions $CONDA_DIR
+
+RUN conda install --quiet --yes \
+    'obspy=1.1*' \
+    'pyproj=1.9*' && \
+    conda clean -tipsy && \
+    fix-permissions $CONDA_DIR
+
+
 
 COPY record_section_hv.py /home/$NB_USER/
 
