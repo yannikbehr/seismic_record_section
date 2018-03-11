@@ -317,6 +317,14 @@ hv.extension('bokeh')
 hv.output(size=30)
 renderer = hv.renderer('bokeh').instance(mode='server')
 
+@gen.coroutine
+def update_log():
+    global text
+    while len(text) > 50:
+        text.pop(0)
+    pre.text = ''.join(text) 
+
+
 def modify_doc(doc):
     
     rs = RecordSection()
@@ -376,6 +384,14 @@ def modify_doc(doc):
     @without_document_lock
     def update():
         global text
+        if rs.start > rs.end:
+            msg = "Start time is later than end time.\n"
+            text.append(msg)
+            return
+        if (rs.end - rs.start) > 3600.:
+            msg = "Length of requested data exceeds 1 hour.\n" 
+            text.append(msg)
+            return
         executor = ThreadPoolExecutor(max_workers=4)
         msg = "Loading data for {:s} between {:s} and {:s}\n".format(rs.target, str(rs.start), str(rs.end))
         text.append(msg)
@@ -398,9 +414,17 @@ def modify_doc(doc):
                 time.sleep(0.1)
                 doc.add_next_tick_callback(update_plot)
         text.append("Loading finished.\n")
-        doc.add_next_tick_callback(update_plot)
 
     def reset():
+        global text
+        if rs.start > rs.end:
+            msg = "Start time is later than end time.\n"
+            text.append(msg)
+            return
+        if (rs.end - rs.start) > 3600.:
+            msg = "Length of requested data exceeds 1 hour.\n" 
+            text.append(msg)
+            return
         dm.event(replot=True)
 
     def update_traces(attr, old, new):
@@ -461,4 +485,6 @@ def modify_doc(doc):
                           widgetbox(select_target, updateb, resetb, cg)]], sizing_mode='fixed'))
     return doc
 
+doc.add_periodic_callback(update_log, 200)
 doc = modify_doc(doc)
+
