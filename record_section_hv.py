@@ -58,6 +58,7 @@ stations['red crater'] = {'seismic':tnp_seismic,
 stations['ngauruhoe'] = {'seismic':tnp_seismic,
                          'acoustic':tnp_acoustic}
 
+
 def GeoNetFDSNrequest(date1, date2, net, sta, loc, cmp):
     """
     Request waveform and meta data from GeoNet's FDSN webservices.
@@ -78,6 +79,7 @@ def GeoNetFDSNrequest(date1, date2, net, sta, loc, cmp):
         inv = arc_client.get_stations(network=net, station=sta, 
                                            starttime=time1, endtime=time2)
     return (st, inv)
+
 
 def get_data(station, location, component,
              tstart, tend, new=False,
@@ -115,10 +117,6 @@ def get_data(station, location, component,
             pickle.dump(tr, fh)
         return tr 
 
-doc = curdoc()
-
-text = ['Program startup\n']
-pre = PreText(text='Program startup', width=500, height=100)
 
 def apply_axis_formatter(plot, element):
     plot.handles['xaxis'].formatter = bokeh.models.DatetimeTickFormatter(hourmin = '%H:%M', 
@@ -140,8 +138,8 @@ class RecordSection:
                         'ruapehu': (175.564490, -39.281149),
                         'ngauruhoe': (175.632169, -39.156791),
                         'red crater': (175.650761, -39.136715)}
-        #end = UTCDateTime(2018,2,11,1,15,00)
-        #end = UTCDateTime.utcnow()
+        self.end = UTCDateTime.utcnow()
+        self.start = self.end - 20*60.
         # 1st Te Maari eruption
         #start = UTCDateTime(2012,8,6,11,40)
         #end = start + 20*60.
@@ -151,8 +149,6 @@ class RecordSection:
         # 2007 Ruapehu eruption
         #tstart = UTCDateTime(2007,9,25,8,26)
         #tend = tstart + 10*60.
-        self.end = UTCDateTime(2012,8,6,12,00,00)
-        self.start = self.end - 20*60.
         self.min_dist = 0.
         self.max_dist = 50.
         self.tmin_old = self.start
@@ -219,6 +215,9 @@ class RecordSection:
             st_seismic.trim(starttime, endtime)
             st_acoustic.trim(starttime, endtime)
         print(tmin, tmax, ymin, ymax)
+
+        # Get rid of dummy curves
+        self.curves = {k:self.curves[k] for k in self.curves if k[1] != "dummy"}
 
         if st_seismic.count() > 0 and self.plot_seismic:
             local_max_s = 0.
@@ -300,8 +299,17 @@ class RecordSection:
                
         if not self.plot_acoustic:
             self.curves = {k:self.curves[k] for k in self.curves if k[1] != "acoustic"}
-
-        color_key = {'seismic': 'blue', 'acoustic': 'red'}    
+        if not self.curves:
+            # Plot dummy curves in case there is no data
+            x0 = np.datetime64(self.start.datetime).astype('int')//10**3
+            x1 = np.datetime64(self.end.datetime).astype('int')//10**3
+            dummy_x = np.linspace(x0, x1, 100)
+            dummy_y = np.ones(100)*y_range[1]
+            for i in range(len(tnp_seismic)+len(tnp_acoustic)):
+                self.curves[('No_%d'%i, 'dummy')] = hv.Curve((dummy_x, dummy_y))
+                labels.append(hv.Text(x0, 0., '').opts(norm=dict(framewise=True)))
+           
+        color_key = {'seismic':'blue', 'acoustic':'red', 'dummy':'grey'}    
         lyt = datashade(hv.NdOverlay(self.curves, kdims=['name', 'type']),
                         aggregator=ds.count_cat('type'),
                         color_key=color_key, dynamic=False, 
@@ -317,6 +325,15 @@ hv.extension('bokeh')
 hv.output(size=30)
 renderer = hv.renderer('bokeh').instance(mode='server')
 
+doc = curdoc()
+text = ['Program startup\n']
+pre = PreText(text='Program startup', width=500, height=100)
+
+update_data = streams.Stream.define('update_data', replot=False)
+rs = RecordSection()
+dm = hv.DynamicMap(rs.build_record_section, streams=[update_data(transient=True),
+                                                     streams.RangeXY(transient=False)])
+
 @gen.coroutine
 def update_log():
     global text
@@ -324,27 +341,44 @@ def update_log():
         text.pop(0)
     pre.text = ''.join(text) 
 
-
-def modify_doc(doc):
-    
-    rs = RecordSection()
-    update_data = streams.Stream.define('update_data', replot=False)
+@gen.coroutine
+@without_document_lock
+def initial_load():
+    global text
+    executor = ThreadPoolExecutor(max_workers=4)
+    msg = "Loading data for {:s} between {:s} and {:s}\n".format(rs.target, str(rs.start), str(rs.end))
+    text.append(msg)
+    rs.reset()
     for _type in ['seismic', 'acoustic']:
         for slc in stations[rs.target][_type]:
             s, l, c = slc
             msg = "Downloading {:s}.{:s}.{:s}\n".format(s, l, c)
             text.append(msg)
-            print(msg)
-            tr = get_data(s, l, c, rs.start, rs.end)
-            if tr is not None: 
+            tr = yield executor.submit(get_data, s, l, c, rs.start, rs.end)
+            if tr is not None:
                 rs.streams[_type] += tr
             else:
                 msg = 'No data for {}.{}.{}\n'.format(s, l, c)
                 text.append(msg)
-                print(msg)
+                time.sleep(0.1)
+                continue
+            # The sleep has to be added to prevent some kind of racing condition
+            # in the underlying bokeh implementation
+            time.sleep(0.1)
+            doc.add_next_tick_callback(update_plot)
+    text.append("Loading finished.\n")
+
+@gen.coroutine
+def update_plot():
+    global text
+    while len(text) > 50:
+        text.pop(0)
+    pre.text = ''.join(text) 
+    dm.event(replot=True)
+
+
+def modify_doc(doc):
     
-    dm = hv.DynamicMap(rs.build_record_section, streams=[update_data(transient=True),
-                                                         streams.RangeXY(transient=False)])
     def startdate_update(attrname, old, new):
         rs.start.year = new.year
         rs.start.month = new.month
@@ -370,15 +404,6 @@ def modify_doc(doc):
     def update_target(attrname, old, new):
         rs.target = new.lower()
         dm.event()
-
-    @gen.coroutine
-    def update_plot():
-        global text
-        while len(text) > 50:
-            text.pop(0)
-        pre.text = ''.join(text) 
-        dm.event(replot=True)
-
 
     @gen.coroutine
     @without_document_lock
@@ -486,5 +511,6 @@ def modify_doc(doc):
     return doc
 
 doc.add_periodic_callback(update_log, 200)
+doc.add_timeout_callback(initial_load, 1000)
 doc = modify_doc(doc)
 
