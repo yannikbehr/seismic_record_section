@@ -9,8 +9,10 @@ import holoviews as hv
 from holoviews.operation.datashader import datashade
 from holoviews import streams
 import bokeh
-from bokeh.layouts import layout, widgetbox
+from bokeh.layouts import layout, widgetbox, row
 from bokeh.plotting import curdoc
+from bokeh.models.callbacks import CustomJS
+from bokeh.models.sources import ColumnDataSource
 from bokeh.models import (FuncTickFormatter, 
                           DatetimeTickFormatter,
                           DatePicker, 
@@ -18,7 +20,8 @@ from bokeh.models import (FuncTickFormatter,
                           Button,
                           Select,
                           PreText,
-                          CheckboxGroup)
+                          CheckboxGroup,
+                          Slider)
 from bokeh.document import without_document_lock
 import param
 from tornado import gen
@@ -160,6 +163,7 @@ class RecordSection:
         self.plot_acoustic = True
         self.plot_seismic = True
         self.plot_labels = False
+        self.red_vel=0.
 
     def reset(self):
         """
@@ -169,7 +173,7 @@ class RecordSection:
         self.curves = {}
         
     def build_record_section(self, x_range=None, y_range=None, replot=False,
-                             red_vel=0., new=False):
+                             new=False):
         tmin = None
         tmax = None
         labels = []
@@ -238,13 +242,15 @@ class RecordSection:
                 data = tr.data[:].astype(np.float)
                 data /= local_max_s
                 try:
-                    id0 = int(d/(red_vel*tr.stats.delta))
+                    t0 = int(tr.stats.distance*1e3/self.red_vel*1e3)
+                    id0 = int(tr.stats.distance*1e3/(self.red_vel*tr.stats.delta))
                 except ZeroDivisionError:
                     id0 = 0
-                data = data[id0:]
+                    t0 = 0
                 times = np.arange(data.size)*(tr.stats.delta*1e3)
-                dates = np.datetime64(tr.stats.starttime.datetime)+times.astype('timedelta64[ms]')
-                idates = np.array(dates.astype(np.int) // 10**3).astype(np.float)
+                dates = np.datetime64(tr.stats.starttime.datetime)+times.astype('timedelta64[ms]') 
+                dates -= np.timedelta64(t0, 'ms')
+                idates = np.array(dates.astype(np.int) // 1e3).astype(np.float)
                 self.curves[key]  = hv.Curve((idates, data-tr.stats.distance))
                 if tr.stats.station not in stats_list:
                     stats_list.append(tr.stats.station)
@@ -252,7 +258,7 @@ class RecordSection:
                         label = tr.stats.station
                     else:
                         label = ''
-                    labels.append(hv.Text(idates[100], -tr.stats.distance,
+                    labels.append(hv.Text(idates[id0+100], -tr.stats.distance,
                                           label, 
                                           halign='left',
                                           valign='bottom').opts(norm=dict(framewise=True)))           
@@ -278,13 +284,15 @@ class RecordSection:
                 data = tr.data[:].astype(np.float)
                 data /= local_max_a 
                 try:
-                    id0 = int(d/(red_vel*tr.stats.delta))
+                    t0 = int(tr.stats.distance*1e3/self.red_vel*1e3)
+                    id0 = int(tr.stats.distance*1e3/(self.red_vel*tr.stats.delta))
                 except ZeroDivisionError:
                     id0 = 0
-                data = data[id0:]
+                    t0 = 0
                 times = np.arange(data.size)*(tr.stats.delta*1e3)
                 dates = np.datetime64(tr.stats.starttime.datetime)+times.astype('timedelta64[ms]')
-                idates = np.array(dates.astype(np.int) // 10**3).astype(np.float)
+                dates -= np.timedelta64(t0,'ms')
+                idates = np.array(dates.astype(np.int) // 1e3).astype(np.float)
                 self.curves[key] = hv.Curve((idates, data-tr.stats.distance))
                 if tr.stats.station not in stats_list:
                     stats_list.append(tr.stats.station)
@@ -292,7 +300,7 @@ class RecordSection:
                         label = tr.stats.station
                     else:
                         label = ''
-                    labels.append(hv.Text(idates[100], -tr.stats.distance,
+                    labels.append(hv.Text(idates[id0+100], -tr.stats.distance,
                                           label,
                                           halign='left',
                                           valign='bottom').opts(norm=dict(framewise=True)))           
@@ -301,8 +309,8 @@ class RecordSection:
             self.curves = {k:self.curves[k] for k in self.curves if k[1] != "acoustic"}
         if not self.curves:
             # Plot dummy curves in case there is no data
-            x0 = np.datetime64(self.start.datetime).astype('int')//10**3
-            x1 = np.datetime64(self.end.datetime).astype('int')//10**3
+            x0 = np.datetime64(self.start.datetime).astype('int')//1e3
+            x1 = np.datetime64(self.end.datetime).astype('int')//1e3
             dummy_x = np.linspace(x0, x1, 100)
             dummy_y = np.ones(100)*y_range[1]
             for i in range(len(tnp_seismic)+len(tnp_acoustic)):
@@ -371,7 +379,7 @@ def initial_load():
 @gen.coroutine
 def update_plot():
     global text
-    while len(text) > 50:
+    while len(text) > 34:
         text.pop(0)
     pre.text = ''.join(text) 
     dm.event(replot=True)
@@ -465,6 +473,13 @@ def modify_doc(doc):
                 rs.plot_labels = True
         dm.event()
 
+    def update_red_vel(attr, old, new):
+        if len(new) < 1:
+            rs.red_vel = 0
+        else:
+           rs.red_vel = 330. 
+        dm.event()
+
     sdateval = "{:d}-{:d}-{:d}".format(rs.start.year,
                                        rs.start.month,
                                        rs.start.day)
@@ -501,13 +516,16 @@ def modify_doc(doc):
 
     cg = CheckboxGroup(labels=["Seismic", "Acoustic", "Station name"], active=[1, 1, 0])
     cg.on_change('active', update_traces)
+    
+    rvel = CheckboxGroup(labels=['Reduction velocity (330 m/s)'], active=[])
+    rvel.on_change('active', update_red_vel)
 
     # Create HoloViews plot and attach the document
     hvplot = renderer.get_plot(dm, doc)
     doc.add_root(layout([[hvplot.state, widgetbox(pre)], 
                          [widgetbox(date_start, starttime), 
                           widgetbox(date_end, endtime),
-                          widgetbox(select_target, updateb, resetb, cg)]], sizing_mode='fixed'))
+                          widgetbox(select_target, updateb, resetb, cg, rvel)]], sizing_mode='fixed'))
     return doc
 
 doc.add_periodic_callback(update_log, 200)
