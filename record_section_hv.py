@@ -21,7 +21,8 @@ from bokeh.models import (FuncTickFormatter,
                           Select,
                           PreText,
                           CheckboxGroup,
-                          Slider)
+                          Slider,
+                          Div)
 from bokeh.document import without_document_lock
 import param
 from tornado import gen
@@ -520,10 +521,12 @@ def modify_doc(doc):
     rvel = CheckboxGroup(labels=['Reduction velocity (330 m/s)'], active=[])
     rvel.on_change('active', update_red_vel)
 
+    div = Div(text="""<a target="_blank" href="https://wiki.geonet.org.nz/display/volcano/Record+Section+Plot
+">Documentation</a>""", width=80, height=30)
     # Create HoloViews plot and attach the document
     hvplot = renderer.get_plot(dm, doc)
     doc.add_root(layout([[hvplot.state, widgetbox(pre)], 
-                         [widgetbox(date_start, starttime), 
+                         [widgetbox(date_start, starttime, div), 
                           widgetbox(date_end, endtime),
                           widgetbox(select_target, updateb, resetb, cg, rvel)]], sizing_mode='fixed'))
     return doc
