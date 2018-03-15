@@ -144,22 +144,13 @@ class RecordSection:
                         'red crater': (175.650761, -39.136715)}
         self.end = UTCDateTime.utcnow()
         self.start = self.end - 20*60.
-        # 1st Te Maari eruption
-        #start = UTCDateTime(2012,8,6,11,40)
-        #end = start + 20*60.
-        # 2nd Te Maari eruption
-        #start = UTCDateTime(2012,11,21,0,20)
-        #end = tstart + 20*60.
-        # 2007 Ruapehu eruption
-        #tstart = UTCDateTime(2007,9,25,8,26)
-        #tend = tstart + 10*60.
         self.min_dist = 0.
-        self.max_dist = 50.
+        self.max_dist = 40.
         self.tmin_old = self.start
         self.tmax_old = self.end
         self.ymin_old = self.min_dist
         self.ymax_old = self.max_dist 
-        self.target = 'te maari'
+        self.target = 'ruapehu'
         self.curves = {}
         self.plot_acoustic = True
         self.plot_seismic = True
@@ -375,7 +366,7 @@ def initial_load():
             # in the underlying bokeh implementation
             time.sleep(0.1)
             doc.add_next_tick_callback(update_plot)
-    text.append("Loading finished.\n")
+    text.append("LOADING FINISHED.\n")
 
 @gen.coroutine
 def update_plot():
@@ -416,7 +407,7 @@ def modify_doc(doc):
 
     @gen.coroutine
     @without_document_lock
-    def update():
+    def load():
         global text
         if rs.start > rs.end:
             msg = "Start time is later than end time.\n"
@@ -447,7 +438,7 @@ def modify_doc(doc):
                 # in the underlying bokeh implementation
                 time.sleep(0.1)
                 doc.add_next_tick_callback(update_plot)
-        text.append("Loading finished.\n")
+        text.append("LOADING FINISHED.\n")
 
     def reset():
         global text
@@ -505,13 +496,13 @@ def modify_doc(doc):
     endtime = TextInput(title='End time', value=etimeval)
     endtime.on_change('value', endtime_update)
     
-    updateb = Button(label='Update', button_type='success')
-    updateb.on_click(update)
+    loadb = Button(label='Load', button_type='success')
+    loadb.on_click(load)
     
     resetb = Button(label='Reset', button_type='success')
     resetb.on_click(reset)
     
-    select_target = Select(title='Volcano', value="Te Maari",
+    select_target = Select(title='Volcano', value="Ruapehu",
                            options=["Te Maari", "Ruapehu", "Ngauruhoe", "Red Crater"])
     select_target.on_change('value', update_target)
 
@@ -528,7 +519,7 @@ def modify_doc(doc):
     doc.add_root(layout([[hvplot.state, widgetbox(pre)], 
                          [widgetbox(date_start, starttime, div), 
                           widgetbox(date_end, endtime),
-                          widgetbox(select_target, updateb, resetb, cg, rvel)]], sizing_mode='fixed'))
+                          widgetbox(select_target, loadb, resetb, cg, rvel)]], sizing_mode='fixed'))
     return doc
 
 doc.add_periodic_callback(update_log, 200)
