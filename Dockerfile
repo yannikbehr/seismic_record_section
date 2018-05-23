@@ -20,6 +20,7 @@ USER $NB_USER
 # Remove pyqt and qt pulled in for matplotlib since we're only ever going to
 # use notebook-friendly backends in these images
 RUN conda install --quiet --yes -c pyviz \
+    'pandas<=0.22' \
     pyviz &&\
     conda remove --quiet --yes --force qt pyqt && \
     conda clean -tipsy && \
