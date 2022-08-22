@@ -1,3 +1,4 @@
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import os
@@ -25,7 +26,6 @@ from bokeh.models import (FuncTickFormatter,
                           Div)
 from bokeh.document import without_document_lock
 import param
-from tornado import gen
 import datashader as ds
 from obspy.clients.fdsn import Client
 from obspy.clients.fdsn.header import FDSNException, FDSNNoDataException
@@ -69,7 +69,7 @@ def GeoNetFDSNrequest(date1, date2, net, sta, loc, cmp):
     """
     #GeoNet's FDSN web servers
     arc_client = Client('http://service.geonet.org.nz')
-    nrt_client = Client('http://beta-service-nrt.geonet.org.nz')
+    nrt_client = Client('http://service-nrt.geonet.org.nz')
     time1 = UTCDateTime(date1)
     time2 = UTCDateTime(date2)
     try:
@@ -316,7 +316,7 @@ class RecordSection:
                         min_alpha=255, width=3000, height=2000, x_range=x_range, y_range=y_range,
                         y_sampling=0.1)      
         return (lyt*hv.Overlay(labels)).opts(plot=dict(width=3000, height=2000, 
-                                                           finalize_hooks=[apply_axis_formatter]),
+                                                           hooks=[apply_axis_formatter]),
                                              norm=dict(framewise=True))
 
 
@@ -334,16 +334,15 @@ rs = RecordSection()
 dm = hv.DynamicMap(rs.build_record_section, streams=[update_data(transient=True),
                                                      streams.RangeXY(transient=False)])
 
-@gen.coroutine
-def update_log():
+
+async def update_log():
     global text
     while len(text) > 50:
         text.pop(0)
     pre.text = ''.join(text) 
 
-@gen.coroutine
 @without_document_lock
-def initial_load():
+async def initial_load():
     global text
     executor = ThreadPoolExecutor(max_workers=4)
     msg = "Loading data for {:s} between {:s} and {:s}\n".format(rs.target, str(rs.start), str(rs.end))
@@ -354,7 +353,7 @@ def initial_load():
             s, l, c = slc
             msg = "Downloading {:s}.{:s}.{:s}\n".format(s, l, c)
             text.append(msg)
-            tr = yield executor.submit(get_data, s, l, c, rs.start, rs.end)
+            tr = await asyncio.wrap_future(executor.submit(get_data, s, l, c, rs.start, rs.end), loop=None)
             if tr is not None:
                 rs.streams[_type] += tr
             else:
@@ -368,8 +367,7 @@ def initial_load():
             doc.add_next_tick_callback(update_plot)
     text.append("LOADING FINISHED.\n")
 
-@gen.coroutine
-def update_plot():
+async def update_plot():
     global text
     while len(text) > 34:
         text.pop(0)
@@ -405,9 +403,8 @@ def modify_doc(doc):
         rs.target = new.lower()
         dm.event()
 
-    @gen.coroutine
     @without_document_lock
-    def load():
+    async def load():
         global text
         if rs.start > rs.end:
             msg = "Start time is later than end time.\n"
@@ -426,7 +423,7 @@ def modify_doc(doc):
                 s, l, c = slc
                 msg = "Downloading {:s}.{:s}.{:s}\n".format(s, l, c)
                 text.append(msg)
-                tr = yield executor.submit(get_data, s, l, c, rs.start, rs.end)
+                tr = await asyncio.wrap_future(executor.submit(get_data, s, l, c, rs.start, rs.end), loop=None)
                 if tr is not None:
                     rs.streams[_type] += tr
                 else:
@@ -472,13 +469,13 @@ def modify_doc(doc):
            rs.red_vel = 330. 
         dm.event()
 
-    sdateval = "{:d}-{:d}-{:d}".format(rs.start.year,
+    sdateval = "{:02d}-{:02d}-{:02d}".format(rs.start.year,
                                        rs.start.month,
                                        rs.start.day)
     date_start = DatePicker(title='Start date', value=sdateval)
     date_start.on_change('value', startdate_update)
 
-    edateval = "{:d}-{:d}-{:d}".format(rs.end.year,
+    edateval = "{:02d}-{:02d}-{:02d}".format(rs.end.year,
                                        rs.end.month,
                                        rs.end.day)
     date_end = DatePicker(title='End date', value=edateval)

@@ -1,0 +1,12 @@
+name: rs
+channels:
+  - pyviz
+  - conda-forge
+dependencies:
+  - holoviews
+  - bokeh
+  - pandas
+  - obspy
+  - datashader
+  - pyproj
+  - xarray
